@@ -1,6 +1,8 @@
 import os
 import ast
 import operator
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -13,9 +15,19 @@ from telegram.ext import (
     filters
 )
 
+
+# =========================
+# ENVIRONMENT
+# =========================
+
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+
+
+# =========================
+# CALCULATOR
+# =========================
 
 operators = {
     ast.Add: operator.add,
@@ -27,7 +39,6 @@ operators = {
 
 
 def calculate(expression):
-
     expression = expression.replace("×", "*")
     expression = expression.replace("÷", "/")
 
@@ -35,12 +46,13 @@ def calculate(expression):
 
     def solve(node):
 
+        # Numbers
         if isinstance(node, ast.Constant):
             if isinstance(node.value, (int, float)):
                 return node.value
 
+        # Binary operations
         if isinstance(node, ast.BinOp):
-
             left = solve(node.left)
             right = solve(node.right)
 
@@ -49,8 +61,8 @@ def calculate(expression):
             if operation:
                 return operation(left, right)
 
+        # +number / -number
         if isinstance(node, ast.UnaryOp):
-
             value = solve(node.operand)
 
             if isinstance(node.op, ast.USub):
@@ -63,6 +75,37 @@ def calculate(expression):
 
     return solve(tree.body)
 
+
+# =========================
+# HTTP HEALTH SERVER
+# =========================
+
+class HealthHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running!")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_health_server():
+
+    port = int(os.environ.get("PORT", 10000))
+
+    server = HTTPServer(
+        ("0.0.0.0", port),
+        HealthHandler
+    )
+
+    server.serve_forever()
+
+
+# =========================
+# /START
+# =========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -86,10 +129,15 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
 
     await update.message.reply_text(
-        "Welcome! 🤖\nChoose an option:",
+        "Welcome! 🤖\n\n"
+        "Choose an option:",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+
+# =========================
+# /HELLO
+# =========================
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -98,7 +146,14 @@ async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# /HELP
+# =========================
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     await update.message.reply_text(
         "Available commands:\n\n"
@@ -109,12 +164,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
-async def calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# /CALC
+# =========================
+
+async def calc(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not context.args:
 
         await update.message.reply_text(
-            "Usage:\n/calc 25 + 10"
+            "Usage:\n"
+            "/calc 25 + 10"
         )
 
         return
@@ -142,18 +205,27 @@ async def calc(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# BUTTON HANDLER
+# =========================
+
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     query = update.callback_query
 
     await query.answer()
 
+    # Hello button
     if query.data == "hello":
 
         await query.message.reply_text(
             "Hello! 👋"
         )
 
+    # Calculator button
     elif query.data == "calculator":
 
         await query.message.reply_text(
@@ -166,6 +238,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "You can also use × and ÷."
         )
 
+    # Help button
     elif query.data == "help":
 
         await query.message.reply_text(
@@ -177,10 +250,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-async def normal_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# =========================
+# NORMAL MESSAGES
+# =========================
+
+async def normal_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     text = update.message.text.strip()
 
+    # Hello / Hi
     if text.lower() in ["hello", "hi"]:
 
         await update.message.reply_text(
@@ -189,6 +270,7 @@ async def normal_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         return
 
+    # Try calculator
     try:
 
         result = calculate(text)
@@ -212,8 +294,19 @@ async def normal_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+# =========================
+# MAIN
+# =========================
+
 def main():
 
+    # Start HTTP health server for Render
+    threading.Thread(
+        target=start_health_server,
+        daemon=True
+    ).start()
+
+    # Create Telegram application
     app = (
         Application.builder()
         .token(BOT_TOKEN)
@@ -224,6 +317,7 @@ def main():
         .build()
     )
 
+    # Commands
     app.add_handler(
         CommandHandler("start", start)
     )
@@ -240,10 +334,12 @@ def main():
         CommandHandler("calc", calc)
     )
 
+    # Inline buttons
     app.add_handler(
         CallbackQueryHandler(button_handler)
     )
 
+    # Normal messages
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
@@ -253,6 +349,7 @@ def main():
 
     print("Token loaded:", BOT_TOKEN is not None)
     print("Bot is running...")
+
 
     app.run_polling(
         timeout=30,
